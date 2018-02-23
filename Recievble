@@ -1,0 +1,203 @@
+Table : receivables
+
+trans_types:
+SAL
+OCC
+ADV
+ADJ
+BLL
+DEP
+
+Rule:
+- and (b.trans_type <> 'BLL' or (b.trans_type='BLL' and b.remark='5'))  
+   and b.trans_type<>'DEP'  
+
+-and (b.trans_type <> 'BLL' or (b.trans_type='BLL' and b.remark='5'))  
+   and b.trans_type<>'DEP'       --deposit not include
+
+***********************************
+
+  ----ar transcation and hot billing
+  insert /*+ append */ into lbikr_bravo.tb_kr_cust_aging_day  nologging
+  (
+   statis_date    ,
+   cust_code      ,
+   accountcode    ,
+   name_lang3     ,
+   accountname    ,
+   typename       ,
+   aging_total    ,
+   billinggroupid
+  )
+  select /*+ parallel(a 4) parallel(b 4) */ 
+       substr(b.entry_date,1,8),
+       a.cust_code,
+       a.accountcode,
+       a.name_lang3,
+       a.accountname,
+       a.typename,
+       sum(b.open_amt)/1000000,
+       a.billinggroupid
+  from lbimk_bravo.tb_mk_cust_aging_day a,
+       lbidw_bravo.tb_dw_all_receivables_his_day b---have data once in one month,other day have no data 
+ where a.accountkey = b.acct_id
+   and (b.trans_type <> 'BLL' or (b.trans_type='BLL' and b.remark='5'))  
+   and b.trans_type<>'DEP'       --deposit not include
+   and a.statis_date= iv_date
+   --and to_char(b.entry_date,'yyyyMMdd') <= iv_date --for history added by qcfang
+   and b.statis_date= iv_date
+ group by substr(b.entry_date,1,8),
+          a.cust_code,
+          a.accountcode,
+          a.name_lang3,
+          a.accountname,
+          a.typename,
+          a.billinggroupid;
+  vi_result := sql%rowcount;
+  commit;
+  ------real biling---------
+  insert /*+ append */ into lbikr_bravo.tb_kr_cust_aging_day nologging
+  (
+   statis_date    ,
+   cust_code      ,
+   accountcode    ,
+   name_lang3     ,
+   accountname    ,
+   typename       ,
+   aging_total    ,
+   billinggroupid
+  )
+  select /*+ parallel(a 4) parallel(b 4) */ 
+       to_char(last_day(to_date(substr(b.bill_cycle_id,1,6),'YYYYMM')),'YYYYMMDD'),
+       a.cust_code,
+       a.accountcode,
+       a.name_lang3,
+       a.accountname,
+       a.typename,
+       sum(b.open_amt)/1000000,
+       a.billinggroupid
+  from lbimk_bravo.tb_mk_cust_aging_day a,
+       lbidw_bravo.tb_dw_all_receivables_his_day b---have data once in one month,other day have no data 
+ where a.accountkey = b.acct_id
+   and b.trans_type = 'BLL' 
+   and nvl(b.remark,0) <> '5'  
+   and a.statis_date= iv_date
+   and b.statis_date= iv_date
+   --and substr(b.bill_cycle_id,1,6)<=substr(iv_date,1,6)--for history add by qcfang
+ group by to_char(last_day(to_date(substr(b.bill_cycle_id,1,6),'YYYYMM')),'YYYYMMDD'),
+          a.cust_code,
+          a.accountcode,
+          a.name_lang3,
+          a.accountname,
+          a.typename,
+          a.billinggroupid
+          ;
+  
+*************************************************************
+REPORT GENERATION
+ insert /*+ append */ into lbikr_bravo.tb_kr_cust_aging_day_bak2 nologging
+  (
+   statis_date    ,
+   cust_code      ,
+   accountcode    ,
+   name_lang3     ,
+   accountname    ,
+   typename       ,
+   billinggroupid ,
+   c0_30          ,     
+   c31_60         ,
+   c61_90         ,
+   c91_120        ,
+   c121_150       ,
+   c151_180       ,
+   c181_210       ,
+   c211_240       ,
+   c241_270       , 
+   c271_300       ,
+   c301_330       ,
+   c331_360       ,
+   c361_720       ,
+   c721_1080      ,
+   c1081_1440     ,
+   c1441_       
+  )
+  select /*+ parallel(a 4) */
+   iv_date,
+   a.cust_code      ,
+   a.accountcode    ,
+   a.name_lang3     ,
+   a.accountname    ,
+   a.typename       ,
+   a.billinggroupid ,
+sum(case when to_date(iv_date,'YYYYMMDD')-to_date(a.statis_date,'YYYYMMDD') between 0 and 30 --January 31
+         then a.aging_total else 0 end),--30 day(include current day)
+
+sum(case when to_date(iv_date,'YYYYMMDD')-to_date(a.statis_date,'YYYYMMDD')>=31 and --December 31
+              to_date(iv_date,'YYYYMMDD')-to_date(a.statis_date,'YYYYMMDD')<=61
+        then a.aging_total else 0 end),--31 day
+
+sum(case when to_date(iv_date,'YYYYMMDD')-to_date(a.statis_date,'YYYYMMDD')>=62 and --November 30
+              to_date(iv_date,'YYYYMMDD')-to_date(a.statis_date,'YYYYMMDD')<=91
+         then a.aging_total else 0 end),--61~90
+
+sum(case when to_date(iv_date,'YYYYMMDD')-to_date(a.statis_date,'YYYYMMDD')>=92 and --October 31
+              to_date(iv_date,'YYYYMMDD')-to_date(a.statis_date,'YYYYMMDD')<=122
+         then a.aging_total else 0 end),--91~120
+
+sum(case when to_date(iv_date,'YYYYMMDD')-to_date(a.statis_date,'YYYYMMDD')>=123 and --September 30
+              to_date(iv_date,'YYYYMMDD')-to_date(a.statis_date,'YYYYMMDD')<=152
+         then a.aging_total else 0 end),--121~150
+
+sum(case when to_date(iv_date,'YYYYMMDD')-to_date(a.statis_date,'YYYYMMDD')>=153 and --August 31
+              to_date(iv_date,'YYYYMMDD')-to_date(a.statis_date,'YYYYMMDD')<=183
+         then a.aging_total else 0 end),--151~180
+
+sum(case when to_date(iv_date,'YYYYMMDD')-to_date(a.statis_date,'YYYYMMDD')>=184 and --July 31
+              to_date(iv_date,'YYYYMMDD')-to_date(a.statis_date,'YYYYMMDD')<=214
+         then a.aging_total else 0 end),--181~210
+
+sum(case when to_date(iv_date,'YYYYMMDD')-to_date(a.statis_date,'YYYYMMDD')>=215 and --june 30
+              to_date(iv_date,'YYYYMMDD')-to_date(a.statis_date,'YYYYMMDD')<=244
+         then a.aging_total else 0 end),--211~240
+
+sum(case when to_date(iv_date,'YYYYMMDD')-to_date(a.statis_date,'YYYYMMDD')>=245 and --may 31
+              to_date(iv_date,'YYYYMMDD')-to_date(a.statis_date,'YYYYMMDD')<=275
+        then a.aging_total else 0 end),--241~270
+
+sum(case when to_date(iv_date,'YYYYMMDD')-to_date(a.statis_date,'YYYYMMDD')>=276 and --apr 30
+              to_date(iv_date,'YYYYMMDD')-to_date(a.statis_date,'YYYYMMDD')<=305
+         then a.aging_total else 0 end),--271~300
+
+sum(case when to_date(iv_date,'YYYYMMDD')-to_date(a.statis_date,'YYYYMMDD')>=306 and --mar 31
+              to_date(iv_date,'YYYYMMDD')-to_date(a.statis_date,'YYYYMMDD')<=336
+         then a.aging_total else 0 end),--301~330
+
+sum(case when to_date(iv_date,'YYYYMMDD')-to_date(a.statis_date,'YYYYMMDD')>=337 and --feb 28
+              to_date(iv_date,'YYYYMMDD')-to_date(a.statis_date,'YYYYMMDD')<=365
+         then a.aging_total else 0 end),--331~360
+
+sum(case when to_date(iv_date,'YYYYMMDD')-to_date(a.statis_date,'YYYYMMDD')>=366 and 
+              to_date(iv_date,'YYYYMMDD')-to_date(a.statis_date,'YYYYMMDD')<=725
+         then a.aging_total else 0 end),--361~720
+
+sum(case when to_date(iv_date,'YYYYMMDD')-to_date(a.statis_date,'YYYYMMDD')>=726 and
+              to_date(iv_date,'YYYYMMDD')-to_date(a.statis_date,'YYYYMMDD')<=1085
+         then a.aging_total else 0 end),--721~1080
+         
+sum(case when to_date(iv_date,'YYYYMMDD')-to_date(a.statis_date,'YYYYMMDD')>=1086 and
+              to_date(iv_date,'YYYYMMDD')-to_date(a.statis_date,'YYYYMMDD')<=1445
+         then a.aging_total else 0 end),--1081~1440
+
+sum(case when to_date(iv_date,'YYYYMMDD')-to_date(a.statis_date,'YYYYMMDD')>=1446
+         then a.aging_total else 0 end)--1441&Above
+from lbikr_bravo.tb_kr_cust_aging_day a
+group by iv_date,
+         a.cust_code      ,
+         a.accountcode    ,
+         a.name_lang3     ,
+         a.accountname    ,
+         a.typename       ,
+         a.billinggroupid 
+         ;
+
+****************************************
